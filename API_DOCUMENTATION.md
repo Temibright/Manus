@@ -68,9 +68,12 @@ payload = {
 
 ## 1. NIN Verification Slips by NIN Number
 
-Generate NIN verification slips using the 11-digit NIN number. Four slip tiers are available: **Premium Slip**, **Regular Slip**, **Standard Slip**, and **VNIN Slip**.
+Generate NIN verification slips using the 11-digit NIN number. Four slip tiers are available:
 
-*   **Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium` (Alternative endpoint: `https://dataverify.com.ng/developers/nin_slips/nin_premium.php`)
+*   **Premium Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium`
+*   **Standard Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_standard`
+*   **Regular Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_regular`
+*   **VNIN Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/vnin_slip.php`
 
 ### Request Parameters
 
@@ -115,7 +118,7 @@ Generate NIN verification slips using the 11-digit NIN number. Four slip tiers a
 $apiKey = "YOUR_API_KEY_HERE";
 $nin = "12345678901";
 
-$url = 'https://dataverify.com.ng/developers/nin_slips/nin_premium.php';
+$url = 'https://dataverify.com.ng/developers/nin_slips/nin_premium';
 
 $payload = json_encode([
     'api_key' => $apiKey,
@@ -208,9 +211,11 @@ if ($apiResponse['status'] === 'success' && !empty($apiResponse['pdf_base64'])) 
 
 ## 2. NIN Verification Slips by Phone Number
 
-Generate NIN verification slips using a registered phone number. Three slip tiers are available: **Premium Slip**, **Regular Slip**, and **Standard Slip**.
+Generate NIN verification slips using a registered phone number. Three slip tiers are available:
 
-*   **Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium_phone` (Alternative endpoint: `https://dataverify.com.ng/developers/nin_slips/nin_by_phone.php`)
+*   **Premium Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium_phone`
+*   **Standard Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_standard_phone`
+*   **Regular Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_regular_phone`
 
 ### Request Parameters
 
@@ -255,7 +260,7 @@ Generate NIN verification slips using a registered phone number. Three slip tier
 $apiKey = "YOUR_API_KEY_HERE";
 $phoneNumber = "08012345678";
 
-$url = 'https://dataverify.com.ng/developers/nin_slips/nin_by_phone.php';
+$url = 'https://dataverify.com.ng/developers/nin_slips/nin_premium_phone';
 
 $payload = json_encode([
     'api_key' => $apiKey,
@@ -301,9 +306,9 @@ if ($apiResponse['status'] === 'success' && !empty($apiResponse['pdf_base64'])) 
 
 ## 3. NIN Verification Slips by Demographic Details
 
-Generate NIN verification slips using personal demographic information. One slip tier is available: **Premium Slip**.
+Generate NIN verification slips using personal demographic information. One slip tier is available:
 
-*   **Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium_demo.php`
+*   **Premium Slip Endpoint:** `POST https://dataverify.com.ng/developers/nin_slips/nin_premium_demo`
 
 ### Request Parameters
 
@@ -365,7 +370,7 @@ $gender = strtolower($genderInput);
 if ($gender === 'male') $gender = 'm';
 if ($gender === 'female') $gender = 'f';
 
-$url = 'https://dataverify.com.ng/developers/nin_slips/nin_premium_demo.php';
+$url = 'https://dataverify.com.ng/developers/nin_slips/nin_premium_demo';
 
 $payload = json_encode([
     'api_key'   => $apiKey,
@@ -417,9 +422,10 @@ if (!empty($curlError)) {
 
 ## 4. BVN Verification Slips
 
-Generate BVN verification slips using the 11-digit BVN number. Two service tiers are available: **Premium Slip** and **Standard Slip**.
+Generate BVN verification slips using the 11-digit BVN number. Two service tiers are available:
 
-*   **Endpoint:** `POST https://dataverify.com.ng/developers/bvn_slip/bvn_premium.php`
+*   **Premium Slip Endpoint:** `POST https://dataverify.com.ng/developers/bvn_slip/bvn_premium.php`
+*   **Standard Slip Endpoint:** `POST https://dataverify.com.ng/developers/bvn_slip/bvn_standard.php`
 
 ### Request Parameters
 
@@ -1231,7 +1237,7 @@ curl_setopt_array($ch, [
 ]);
 
 $response = curl_exec($ch);
-close($ch);
+curl_close($ch);
 
 $result = json_decode($response, true);
 
