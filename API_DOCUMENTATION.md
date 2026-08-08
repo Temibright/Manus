@@ -1,6 +1,6 @@
 # 📘 DataVerify API Documentation
 
-Welcome to the **DataVerify API Documentation**. This document provides comprehensive reference material for developers integrating with our identity verification APIs, covering NIN verification slips (by NIN, phone, or demographics), BVN verification slips, bank account verification, IPE clearance, and NIN validation workflows.
+Welcome to the **DataVerify API Documentation**. This document provides comprehensive reference material for developers integrating with our identity verification APIs, covering NIN verification slips (by NIN, phone, or demographics), BVN verification slips, bank account verification, IPE clearance, NIN validation, and Personalization workflows.
 
 ---
 
@@ -62,7 +62,9 @@ payload = {
 7.  **[IPE Clearance - Check Status](#7-ipe-clearance---check-status)**
 8.  **[NIN Validation - Submit Request](#8-nin-validation---submit-request)**
 9.  **[NIN Validation - Check Status](#9-nin-validation---check-status)**
-10. **[Error Handling](#10-error-handling)**
+10. **[Personalization - Submit Request](#10-personalization---submit-request)**
+11. **[Personalization - Check Status](#11-personalization---check-status)**
+12. **[Error Handling](#12-error-handling)**
 
 ---
 
@@ -1265,7 +1267,327 @@ switch ($result['request_status'] ?? '') {
 
 ---
 
-## 10. Error Handling
+## 10. Personalization - Submit Request
+
+Submit a tracking ID for personalization. This request only gets the ticket accepted for processing — it does not carry the final outcome. Poll the status endpoint below for the real result: `completed` (with the full personal record, including the NIN) or `failed` (automatically refunded). A request that is rejected outright at submission (invalid tracking ID, provider unreachable, etc.) is also refunded automatically.
+
+*   **Endpoint:** `POST https://dataverify.com.ng/api/developers/personalization.php`
+
+### Request Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `api_key` | string | **Yes** | Your API authentication key (max 50 characters) |
+| `tracking_id` | string | **Yes** | The tracking ID to personalize. 1–20 characters, letters and numbers only |
+
+### HTTP Status Codes
+
+*   **`200 OK`**: Success - Request approved and processed.
+*   **`400 Bad Request`**: Missing parameters, invalid tracking_id format, or insufficient balance.
+*   **`401 Unauthorized`**: Invalid API key.
+*   **`403 Forbidden`**: IP address blocked.
+*   **`429 Too Many Requests`**: Rate limit exceeded (100 requests/hour per key, 60 requests/minute per IP).
+*   **`502 Bad Gateway`**: The personalization provider rejected or failed the request. You are refunded automatically.
+
+### Success Response Structure
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `status` | boolean | `true` if the ticket was accepted |
+| `accepted` | boolean | Whether the provider took the tracking ID in for processing (not the final outcome) |
+| `category` | string | Next-step category from the provider, e.g. `to_get_slip` |
+| `transaction_id` | string | Your reference for this request — use it with the status endpoint to poll for the outcome |
+| `price` | number | Amount charged for this request |
+| `balance_before` | number | Your API balance before the deduction |
+| `balance_after` | number | Your API balance after the deduction |
+| `request_status` | string | Always `"pending"` on a fresh submission |
+
+### Response Examples
+
+==== Request JSON ====
+```json
+{
+    "api_key": "YOUR_API_KEY_HERE",
+    "tracking_id": "S1E9NVQ8C770C9Y"
+}
+```
+
+==== Response `200 OK` (Success) ====
+```json
+{
+    "status": true,
+    "message": "Personalization Submission Successfull",
+    "tracking_id": "S1E9NVQ8C770C9Y",
+    "accepted": true,
+    "category": "to_get_slip",
+    "transaction_id": "7a519decee1f202c8e27df4bba3e34",
+    "price": 100,
+    "balance_before": 1000,
+    "balance_after": 900,
+    "request_status": "pending"
+}
+```
+
+==== Response `400 Bad Request` (Invalid Format) ====
+```json
+{
+    "status": false,
+    "message": "Invalid tracking_id format, must be 1 to 20 characters (letters and numbers)."
+}
+```
+
+==== Response `400 Bad Request` (Insufficient Balance) ====
+```json
+{
+    "status": false,
+    "message": "Insufficient balance",
+    "price": 100,
+    "balance": 50
+}
+```
+
+==== Response `502 Bad Gateway` ====
+```json
+{
+    "status": false,
+    "message": "Personalization request failed: ",
+    "price": 100,
+    "refunded": true
+}
+```
+
+==== Response `401 Unauthorized` ====
+```json
+{
+    "status": false,
+    "message": "Invalid API key"
+}
+```
+
+==== Response `429 Too Many Requests` ====
+```json
+{
+    "status": false,
+    "message": "Rate limit exceeded. Please try again later."
+}
+```
+
+==== Response `403 Forbidden` ====
+```json
+{
+    "status": false,
+    "message": "Your IP address is blocked due to suspicious activity."
+}
+```
+
+### Integration Examples
+
+==== PHP Implementation Example ====
+```php
+<?php
+$url = 'https://dataverify.com.ng/api/developers/personalization.php';
+
+$payload = [
+    'api_key'     => 'YOUR_API_KEY_HERE',
+    'tracking_id' => 'S1E9NVQ8C770C9Y'
+];
+
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_POST           => true,
+    CURLOPT_POSTFIELDS     => json_encode($payload),
+    CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+]);
+
+$response  = curl_exec($ch);
+$http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+curl_close($ch);
+
+$result = json_decode($response, true);
+
+if ($http_code === 200 && !empty($result['status'])) {
+    echo "Accepted: " . ($result['accepted'] ? 'yes' : 'no') . "\n";
+    echo "Category: " . $result['category'] . "\n";
+    echo "Transaction ID: " . $result['transaction_id'] . "\n";
+    // Store transaction_id, then poll personalization_status.php
+} else {
+    echo "Error: " . ($result['message'] ?? 'Unknown error') . "\n";
+}
+?>
+```
+
+---
+
+## 11. Personalization - Check Status
+
+Poll this endpoint to get the real outcome of a submission — the submit endpoint only confirms the ticket was accepted. Each call while a request is still pending live-checks the provider and updates the record, so keep polling every few seconds until `request_status` becomes `completed` or `failed` (automatically refunded). On completion you get the full personal record in `user_data`, the NIN in `nin`, and a ready-to-print NIN slip PDF (base64) in `pdf_base64` — the same layout as the Regular slip. Lookups are scoped to your API key and do not affect your wallet balance.
+
+*   **Endpoint:** `POST https://dataverify.com.ng/api/developers/personalization_status.php`
+
+### Request Parameters
+
+| Parameter | Type | Required | Description |
+| :--- | :--- | :--- | :--- |
+| `api_key` | string | **Yes** | Your API authentication key (max 50 characters) |
+| `transaction_id` | string | **Yes (or Tracking ID)** | The transaction ID returned at submission. Preferred as it identifies an exact request |
+| `tracking_id` | string | **Yes (or TxID)** | The tracking ID. Returns your most recent submission for it. Ignored if `transaction_id` is supplied |
+| `include_slip` | boolean | No | Defaults to `true`. Set to `false` while you are just polling for the outcome — rendering the slip PDF adds roughly 1.5s to the response, so skip it until the request actually completes |
+
+### Request Statuses Description
+
+| `request_status` | `status` | Meaning |
+| :--- | :--- | :--- |
+| `"pending"` | `true` | Still processing on the provider's side. Keep polling |
+| `"completed"` | `true` | Done. Full personal record in `user_data`, the NIN pulled out into `nin`, and the printable NIN slip as a base64 PDF in `pdf_base64` |
+| `"failed"` | `false` | Could not be personalized. Reason is in `error_detail`. You are refunded automatically |
+
+### HTTP Status Codes
+
+*   **`200 OK`**: Success - Record found, check `request_status`.
+*   **`400 Bad Request`**: Missing or malformed parameters.
+*   **`401 Unauthorized`**: Invalid API key.
+*   **`404 Not Found`**: No personalization request found under this reference on your account.
+
+### Response Examples
+
+==== Request JSON (by Transaction ID) ====
+```json
+{
+    "api_key": "YOUR_API_KEY_HERE",
+    "transaction_id": "7a519decee1f202c8e27df4bba3e34"
+}
+```
+
+==== Request JSON (by Tracking ID) ====
+```json
+{
+    "api_key": "YOUR_API_KEY_HERE",
+    "tracking_id": "S1E9NVQ8C770C9Y"
+}
+```
+
+==== Response `200 OK` (Pending) ====
+```json
+{
+    "status": true,
+    "message": "Your personalization request is still processing. Please check back shortly.",
+    "request_status": "pending",
+    "tracking_id": "S1E9NVQ8C770C9Y",
+    "transaction_id": "7a519decee1f202c8e27df4bba3e34",
+    "price": 100,
+    "category": "to_get_slip",
+    "date": "2026-08-07 18:29:53"
+}
+```
+
+==== Response `200 OK` (Completed) ====
+```json
+{
+    "status": true,
+    "message": "Personalization completed successfully.",
+    "request_status": "completed",
+    "tracking_id": "S1E9NVQ8C770C9Y",
+    "transaction_id": "7a519decee1f202c8e27df4bba3e34",
+    "price": 100,
+    "category": "to_get_slip",
+    "nin": "27553559234",
+    "user_data": {
+        "firstName": "ABDULRAHMAN",
+        "middleName": "TUKUR",
+        "lastName": "ABDULHADI",
+        "dateOfBirth": "07-06-2002",
+        "gender": "MALE",
+        "idNumber": "27553559234",
+        "nin": "27553559234",
+        "tracking_id": "S1E9NVQ8C770C9Y",
+        "photo": "/9j/4AAQSkZJRgABAQEAYABgAAD...",
+        "residence_state": "",
+        "heigth": "170"
+    },
+    "pdf_base64": "JVBERi0xLjcKJeLjz9MKMTAgMCBvYmoKPDwvVHlwZS9QYWdl...",
+    "date": "2026-08-07 18:29:53",
+    "completed_at": "2026-08-07 20:05:00"
+}
+```
+
+==== Response `200 OK` (Failed) ====
+```json
+{
+    "status": false,
+    "message": "Personalization request failed.",
+    "request_status": "failed",
+    "tracking_id": "S1E9NVQ8C770C9Y",
+    "transaction_id": "dc29de12b2ab9747a696f9097e4dd0",
+    "price": 100,
+    "error_detail": "Personalization failed",
+    "date": "2026-08-07 18:13:29"
+}
+```
+
+==== Response `404 Not Found` ====
+```json
+{
+    "status": false,
+    "message": "No personalization request found for this reference on your account."
+}
+```
+
+### Integration Examples
+
+==== PHP Implementation Example ====
+```php
+<?php
+$url = 'https://dataverify.com.ng/api/developers/personalization_status.php';
+
+$payload = [
+    'api_key'        => 'YOUR_API_KEY_HERE',
+    'transaction_id' => '7a519decee1f202c8e27df4bba3e34'
+];
+
+$ch = curl_init($url);
+curl_setopt_array($ch, [
+    CURLOPT_RETURNTRANSFER => true,
+    CURLOPT_POST           => true,
+    CURLOPT_POSTFIELDS     => json_encode($payload),
+    CURLOPT_HTTPHEADER     => ['Content-Type: application/json']
+]);
+
+$response = curl_exec($ch);
+curl_close($ch);
+
+$result = json_decode($response, true);
+
+switch ($result['request_status'] ?? '') {
+    case 'completed':
+        echo "NIN: " . $result['nin'] . "\n";
+        print_r($result['user_data']);
+
+        // Save the printable slip
+        if (!empty($result['pdf_base64'])) {
+            file_put_contents('slip.pdf', base64_decode($result['pdf_base64']));
+            echo "Slip saved to slip.pdf\n";
+        }
+        break;
+
+    case 'pending':
+        echo "Still processing -- poll again in a few seconds.\n";
+        break;
+
+    case 'failed':
+        echo "Request failed!\n";
+        echo "Reason: " . ($result['error_detail'] ?? 'No details') . "\n";
+        break;
+
+    default:
+        echo "Unexpected status: " . ($result['message'] ?? 'Unknown');
+}
+?>
+```
+
+---
+
+## 12. Error Handling
 
 All API responses follow a consistent format. Always inspect the `status` or success indicators in the response payload to determine if an operation was successful.
 
