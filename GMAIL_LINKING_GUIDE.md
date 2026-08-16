@@ -1,0 +1,476 @@
+# 📧 Gmail Connection & Identity Linking Guide
+
+This guide explains how to connect Gmail successfully to your application for identity verification, NIN credential retrieval, user account linking, and automated OTP extraction from email messages.
+
+---
+
+## 📌 Overview
+
+When performing a NIN search or credential lookup in identity apps (e.g., DataVerify / NIMC identity portals), the system checks for credentials stored against the specified National Identification Number (NIN).
+
+If the system returns:
+> **`NO Credentials FOUND FOR <NIN_NUMBER>`**
+
+It indicates that the NIN record is not yet linked to an authorized Google/Gmail profile, or the app requires OAuth authorization to fetch or sync identity tokens/credentials associated with the user's Gmail account.
+
+---
+
+## 💻 Where & How the Extracted OTP Code is Displayed
+
+Once your backend fetches and extracts the OTP code from Gmail, there are **three primary ways** it is displayed and used in your application:
+
+### Option A: Auto-filled Directly into the OTP Input Box (Recommended UX)
+Your frontend web page or mobile app polls the backend while waiting for the email. Once the backend extracts the OTP, the frontend automatically populates the input field and submits the form.
+
+```javascript
+// Frontend polling script (e.g., in your NIN portal page)
+async function pollForGmailOTP(ninNumber) {
+    const statusText = document.getElementById("statusMessage");
+    statusText.innerText = "Checking Gmail for OTP...";
+
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/get-gmail-otp?nin=${ninNumber}`);
+            const data = await res.json();
+
+            if (data.success && data.otp) {
+                clearInterval(interval);
+
+                // 1. Display OTP in the input field automatically
+                const otpInput = document.getElementById("otpField");
+                otpInput.value = data.otp;
+
+                // 2. Show success banner
+                statusText.innerText = `OTP Received: ${data.otp}`;
+
+                // 3. (Optional) Auto-submit verification form
+                document.getElementById("verifyForm").submit();
+            }
+        } catch (err) {
+            console.error("Polling error:", err);
+        }
+    }, 3000); // Poll every 3 seconds
+}
+```
+
+---
+
+### Option B: Displayed in a Toast / Notification Banner
+An alert notification or modal banner pops up on top of your app interface:
+
+```html
+<!-- Notification Modal HTML -->
+<div id="otpModal" class="alert alert-success" style="display:none;">
+    <strong>OTP Detected!</strong> Your verification code is:
+    <span id="otpCodeValue" style="font-size: 1.5rem; font-weight: bold; color: #155724;">481920</span>
+    <button onclick="copyOtpToClipboard()">Copy Code</button>
+</div>
+```
+
+---
+
+### Option C: Returned in Backend REST API Response JSON
+If you are calling the API programmatically (e.g., from your server, mobile app, or WordPress plugin), the endpoint responds with JSON:
+
+```json
+{
+  "success": true,
+  "nin": "41874076779",
+  "gmail": "user@gmail.com",
+  "otp": "481920",
+  "message": "OTP successfully fetched and extracted from Gmail",
+  "received_at": "2026-08-16T22:52:18Z"
+}
+```
+
+---
+
+## 🔑 How to Automatically Retrieve OTPs Sent to Gmail
+
+If your application needs to automatically capture OTPs (One-Time Passwords) or verification codes sent to the user's Gmail address (e.g., NIMC login OTP, verification tokens, or slip authorization codes), follow this exact workflow:
+
+### 1. Request Offline Access and Read Scope
+When redirecting the user to Google OAuth, request `access_type=offline` (to receive a `refresh_token`) and the `gmail.readonly` scope:
+
+```javascript
+const scopes = [
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/gmail.readonly" // <--- Required to read emails for OTP
+].join(" ");
+
+const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${GOOGLE_CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&access_type=offline` +  // <--- Required to receive refresh_token
+    `&prompt=consent`;
+```
+
+---
+
+### 2. Store `refresh_token` in Database
+When handling the OAuth callback in your backend, save the user's `refresh_token`. This allows your app to poll or read OTP emails in the background even when the user's access token expires.
+
+---
+
+### 3. Complete Node.js Implementation to Extract OTP from Gmail
+
+Below is a complete implementation that queries Gmail API for the latest OTP email, decodes the body, and uses Regular Expressions to extract the numeric OTP code.
+
+```javascript
+const { google } = require('googleapis');
+
+/**
+ * Automatically retrieves the latest OTP code sent to the user's Gmail account.
+ *
+ * @param {string} refreshToken - User's stored OAuth refresh token
+ * @returns {Promise<string|null>} - The extracted OTP string (e.g. "481920") or null if not found.
+ */
+async function getLatestEmailOTP(refreshToken) {
+    // Initialize OAuth2 client
+    const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+    );
+
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+    try {
+        // 1. Search for recent emails containing OTP keywords or from NIMC
+        const searchResponse = await gmail.users.messages.list({
+            userId: 'me',
+            q: 'subject:(OTP OR "Verification Code" OR NIN OR NIMC) OR "verification code"',
+            maxResults: 5
+        });
+
+        const messages = searchResponse.data.messages;
+        if (!messages || messages.length === 0) {
+            console.log("No OTP emails found.");
+            return null;
+        }
+
+        // 2. Fetch details for the most recent email
+        const messageId = messages[0].id;
+        const msgResponse = await gmail.users.messages.get({
+            userId: 'me',
+            id: messageId,
+            format: 'full'
+        });
+
+        // 3. Decode the email body (Base64URL encoded)
+        const payload = msgResponse.data.payload;
+        let bodyData = "";
+
+        if (payload.body && payload.body.data) {
+            bodyData = payload.body.data;
+        } else if (payload.parts) {
+            // Check text/plain or text/html parts
+            const textPart = payload.parts.find(part => part.mimeType === 'text/plain' || part.mimeType === 'text/html');
+            if (textPart && textPart.body && textPart.body.data) {
+                bodyData = textPart.body.data;
+            }
+        }
+
+        // Convert base64url string to readable UTF-8 text
+        const decodedBody = Buffer.from(bodyData, 'base64url').toString('utf-8');
+
+        // 4. Extract OTP code using Regular Expressions
+        // Matches common patterns like "OTP: 123456", "code is 123456", or standalone 4-6 digit numbers
+        const otpPatterns = [
+            /your\s+(?:otp|verification\s+code)\s+is\s*[:\-]?\s*(\d{4,8})/i,
+            /(?:otp|code)\s*[:\-]?\s*(\d{4,8})/i,
+            /\b(\d{6})\b/,
+            /\b(\d{4})\b/
+        ];
+
+        for (const pattern of otpPatterns) {
+            const match = decodedBody.match(pattern);
+            if (match && match[1]) {
+                const otpCode = match[1];
+                console.log(`Successfully extracted OTP: ${otpCode}`);
+                return otpCode;
+            }
+        }
+
+        console.log("Email body decoded, but no numeric OTP matched.");
+        return null;
+
+    } catch (error) {
+        console.error("Error fetching OTP from Gmail API:", error.response?.data || error.message);
+        throw error;
+    }
+}
+```
+
+---
+
+## 📬 Will I Have Access to User Messages Once Gmail is Linked?
+
+**Short Answer:** **Not by default.** Access to user emails depends entirely on the **OAuth Scopes** requested during authorization.
+
+### 1. Basic Identity Linking (Default Setup)
+By default, standard account linking requests basic profile scopes:
+- `openid`
+- `https://www.googleapis.com/auth/userinfo.email`
+- `https://www.googleapis.com/auth/userinfo.profile`
+
+**What you CAN access:**
+- User's primary Gmail address.
+- Google User ID.
+- Profile name and profile photo.
+
+**What you CANNOT access:**
+- User's inbox or messages.
+- Email contents, attachments, or search filters.
+
+---
+
+### 2. Reading Gmail Messages (Special Scope Setup)
+If your app specifically needs to read incoming emails (e.g., searching for NIMC slip PDF attachments, verification codes, or official credential emails), you must explicitly request the Gmail API scope:
+- `https://www.googleapis.com/auth/gmail.readonly` (Read-only access to emails)
+
+#### Google Security & Verification Requirements for Gmail Scopes
+Google classifies `gmail.readonly` as a **Restricted Scope**. To access user emails in production:
+1. **OAuth Verification**: You must submit your app to Google for OAuth Verification via Google Cloud Console.
+2. **CASA Security Assessment**: Google requires apps using restricted Gmail scopes to undergo an annual independent security audit (Cloud Application Security Assessment - CASA).
+3. **Limited Use Compliance**: You must strictly adhere to Google's API Services User Data Policy (no selling email data, no human reading of emails except with consent for security/support).
+
+---
+
+## 🔘 UI Action Buttons Explained
+
+| Button | Technical Mechanism | Primary Use Case |
+| :--- | :--- | :--- |
+| **Link Gmail** | Standard Web OAuth 2.0 Authorization Flow | Redirects user to Google OAuth login in browser to grant account permissions. |
+| **Link Gmail from My Device** | Native Google Credential Manager / One Tap SDK | Selects an existing Google/Gmail account logged into the user's mobile device without re-entering credentials. |
+| **Copy Link** | Copies Generated Authorization URL to Clipboard | Useful for cross-device authentication, sharing to external browser, or in-app WebViews. |
+
+---
+
+## 🚀 Step-by-Step Implementation Guide
+
+### Step 1: Google Cloud Console Configuration
+
+To connect Gmail to your app, you must register your application in the Google Cloud Console.
+
+1. **Create a Project**:
+   - Go to [Google Cloud Console](https://console.cloud.google.com/).
+   - Click **Select a project** > **New Project**, name it (e.g., `Identity-NIN-Verify`), and click **Create**.
+
+2. **Configure OAuth Consent Screen**:
+   - Navigate to **APIs & Services** > **OAuth consent screen**.
+   - Select **User Type** (`External` for public users, `Internal` for organization members).
+   - Fill in App Information (App Name, User Support Email, Developer Contact Info).
+   - Add required Scopes:
+     - `openid`
+     - `https://www.googleapis.com/auth/userinfo.email`
+     - `https://www.googleapis.com/auth/userinfo.profile`
+     - `https://www.googleapis.com/auth/gmail.readonly` *(Required for OTP extraction)*
+   - Save and set Publishing Status to **In production** (or add Test Users if in testing phase).
+
+3. **Create Credentials**:
+   - Navigate to **APIs & Services** > **Credentials** > **Create Credentials** > **OAuth client ID**.
+   - **For Web ("Link Gmail" & "Copy Link")**:
+     - Application Type: **Web application**.
+     - Authorized JavaScript origins: `https://your-domain.com` (or `http://localhost:3000` for dev).
+     - Authorized redirect URIs: `https://your-domain.com/api/auth/google/callback`.
+   - **For Mobile/Android ("Link Gmail from My Device")**:
+     - Application Type: **Android**.
+     - Package Name: e.g. `com.yourcompany.identityapp`.
+     - SHA-1 Certificate Fingerprint: Obtained via `./gradlew signingReport` or keytool.
+
+---
+
+### Step 2: Implementing "Link Gmail" (Web OAuth 2.0 Flow)
+
+#### Frontend (JavaScript / React / Web)
+Generate the authorization redirect URL when the user clicks **Link Gmail**.
+
+```javascript
+const GOOGLE_CLIENT_ID = "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com";
+const REDIRECT_URI = "https://your-domain.com/api/auth/google/callback";
+
+function handleLinkGmail(ninNumber) {
+    const scopes = [
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "openid"
+    ].join(" ");
+
+    // Include state parameter to retain NIN context across redirect
+    const state = encodeURIComponent(JSON.stringify({ nin: ninNumber, action: "link_gmail" }));
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `client_id=${GOOGLE_CLIENT_ID}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(scopes)}` +
+        `&state=${state}` +
+        `&access_type=offline` +
+        `&prompt=consent`;
+
+    window.location.href = authUrl;
+}
+```
+
+---
+
+### Step 3: Implementing "Link Gmail from My Device" (Native / One Tap)
+
+For seamless device authentication on mobile devices or Google One-Tap enabled web apps, use Google Identity Services (GIS).
+
+#### Web / Android Integration Example (Google Identity Services)
+```html
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<script>
+function initializeGoogleDeviceAuth(ninNumber) {
+    google.accounts.id.initialize({
+        client_id: "YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com",
+        callback: (response) => handleCredentialResponse(response, ninNumber),
+        auto_select: false
+    });
+
+    // Triggers the native Google Account chooser modal on device
+    google.accounts.id.prompt((notification) => {
+        if (notification.isNotDisplayed() || notification.isSkippedMoment()) {
+            // Fallback to standard web redirect if One-Tap is dismissed/unavailable
+            handleLinkGmail(ninNumber);
+        }
+    });
+}
+
+function handleCredentialResponse(response, ninNumber) {
+    // response.credential contains the ID Token (JWT) signed by Google
+    fetch('/api/auth/google/native-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            id_token: response.credential,
+            nin: ninNumber
+        })
+    })
+    .then(res => res.json())
+    .then(data => {
+        if (data.success) {
+            alert("Gmail successfully linked to NIN profile!");
+            window.location.reload();
+        } else {
+            alert("Linking failed: " + data.message);
+        }
+    });
+}
+</script>
+```
+
+---
+
+### Step 4: Implementing "Copy Link"
+
+Allow users to copy the generated OAuth authentication link to share or open in an external browser.
+
+```javascript
+function handleCopyLink(ninNumber) {
+    const scopes = [
+        "https://www.googleapis.com/auth/userinfo.email",
+        "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
+        "openid"
+    ].join(" ");
+
+    const state = encodeURIComponent(JSON.stringify({ nin: ninNumber, action: "link_gmail" }));
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+        `client_id=${GOOGLE_CLIENT_ID}` +
+        `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+        `&response_type=code` +
+        `&scope=${encodeURIComponent(scopes)}` +
+        `&state=${state}` +
+        `&access_type=offline` +
+        `&prompt=consent`;
+
+    navigator.clipboard.writeText(authUrl).then(() => {
+        alert("Authentication link copied to clipboard!");
+    }).catch(err => {
+        console.error("Failed to copy link: ", err);
+    });
+}
+```
+
+---
+
+### Step 5: Backend Callback & Account Linking
+
+#### Node.js / Express Callback Handler
+```javascript
+const express = require('express');
+const axios = require('axios');
+const app = express();
+
+app.get('/api/auth/google/callback', async (req, res) => {
+    const { code, state } = req.query;
+    const { nin } = JSON.parse(decodeURIComponent(state || '{}'));
+
+    try {
+        // 1. Exchange authorization code for tokens
+        const tokenResponse = await axios.post('https://oauth2.googleapis.com/token', {
+            code,
+            client_id: process.env.GOOGLE_CLIENT_ID,
+            client_secret: process.env.GOOGLE_CLIENT_SECRET,
+            redirect_uri: process.env.GOOGLE_REDIRECT_URI,
+            grant_type: 'authorization_code'
+        });
+
+        const { access_token, refresh_token, id_token } = tokenResponse.data;
+
+        // 2. Retrieve user info from Google
+        const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
+            headers: { Authorization: `Bearer ${access_token}` }
+        });
+
+        const userEmail = userResponse.data.email;
+        const googleUserId = userResponse.data.id;
+
+        // 3. Link Gmail address and store refresh_token to allow fetching OTPs
+        await saveGmailNinAssociation({
+            nin: nin,
+            email: userEmail,
+            googleUserId: googleUserId,
+            accessToken: access_token,
+            refreshToken: refresh_token // <--- Store refresh_token for fetching OTPs later
+        });
+
+        // 4. Redirect user back to portal with success parameter
+        res.redirect(`/nin-verify?nin=${nin}&gmail_linked=true`);
+    } catch (error) {
+        console.error("Error linking Gmail:", error.response?.data || error.message);
+        res.redirect(`/nin-verify?nin=${nin}&error=gmail_link_failed`);
+    }
+});
+```
+
+---
+
+## 🛠️ Troubleshooting & Frequently Asked Questions
+
+### 1. Why do I see `NO Credentials FOUND FOR <NIN>`?
+- The specified NIN has not been attached to a Gmail address in the system database yet.
+- Connecting Gmail binds the email identity to the NIN, enabling automated credential generation, verification receipts, and identity document access.
+
+### 2. Error: `redirect_uri_mismatch`
+- **Cause**: The `redirect_uri` parameter sent in the OAuth request does not match the exact authorized redirect URI configured in Google Cloud Console.
+- **Solution**: Check protocol (`http` vs `https`), host (`localhost` vs domain), port, and trailing slashes. Make sure `https://your-domain.com/api/auth/google/callback` matches character-for-character.
+
+### 3. Error: `Access blocked: Authorization Error / App not verified`
+- **Cause**: The app is in "Testing" mode in Google Cloud Console, and the signing user is not added to the list of Test Users.
+- **Solution**: Either add the user email under **OAuth consent screen > Test users**, or publish the app to Production mode.
+
+### 4. WebView issues on mobile devices
+- Google blocks OAuth requests inside embedded WebViews for security reasons (`disallowed_useragent`).
+- Use **Google Sign-In / Credential Manager SDK** natively or launch an external system browser (Custom Tabs) when using "Link Gmail from My Device".
