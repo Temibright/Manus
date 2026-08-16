@@ -15,6 +15,80 @@ It indicates that the NIN record is not yet linked to an authorized Google/Gmail
 
 ---
 
+## 📬 Will I Have Access to User Messages Once Gmail is Linked?
+
+**Short Answer:** **Not by default.** Access to user emails depends entirely on the **OAuth Scopes** requested during authorization.
+
+### 1. Basic Identity Linking (Default Setup)
+By default, standard account linking requests basic profile scopes:
+- `openid`
+- `https://www.googleapis.com/auth/userinfo.email`
+- `https://www.googleapis.com/auth/userinfo.profile`
+
+**What you CAN access:**
+- User's primary Gmail address.
+- Google User ID.
+- Profile name and profile photo.
+
+**What you CANNOT access:**
+- User's inbox or messages.
+- Email contents, attachments, or search filters.
+
+---
+
+### 2. Reading Gmail Messages (Special Scope Setup)
+If your app specifically needs to read incoming emails (e.g., searching for NIMC slip PDF attachments, verification codes, or official credential emails), you must explicitly request the Gmail API scope:
+- `https://www.googleapis.com/auth/gmail.readonly` (Read-only access to emails)
+
+#### Google Security & Verification Requirements for Gmail Scopes
+Google classifies `gmail.readonly` as a **Restricted Scope**. To access user emails in production:
+1. **OAuth Verification**: You must submit your app to Google for OAuth Verification via Google Cloud Console.
+2. **CASA Security Assessment**: Google requires apps using restricted Gmail scopes to undergo an annual independent security audit (Cloud Application Security Assessment - CASA).
+3. **Limited Use Compliance**: You must strictly adhere to Google's API Services User Data Policy (no selling email data, no human reading of emails except with consent for security/support).
+
+#### Code Example: Requesting Gmail Read Scope
+```javascript
+const scopes = [
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/gmail.readonly" // <--- Explicit scope for reading emails
+].join(" ");
+```
+
+#### Code Example: Searching User Gmail Messages for Verification Emails (Node.js)
+```javascript
+const { google } = require('googleapis');
+
+async function searchUserVerificationEmails(accessToken) {
+    const auth = new google.auth.OAuth2();
+    auth.setCredentials({ access_token: accessToken });
+
+    const gmail = google.gmail({ version: 'v1', auth });
+
+    // Search for emails matching query (e.g., from NIMC or containing NIN slip)
+    const response = await gmail.users.messages.list({
+        userId: 'me',
+        q: 'from:nimc.gov.ng OR "NIN Slip" OR "Identity Clearance"'
+    });
+
+    const messages = response.data.messages || [];
+    console.log(`Found ${messages.length} matching messages.`);
+
+    if (messages.length > 0) {
+        // Retrieve full message content for the first match
+        const msg = await gmail.users.messages.get({
+            userId: 'me',
+            id: messages[0].id
+        });
+        return msg.data;
+    }
+
+    return null;
+}
+```
+
+---
+
 ## 🔘 UI Action Buttons Explained
 
 | Button | Technical Mechanism | Primary Use Case |
@@ -43,6 +117,7 @@ To connect Gmail to your app, you must register your application in the Google C
      - `openid`
      - `https://www.googleapis.com/auth/userinfo.email`
      - `https://www.googleapis.com/auth/userinfo.profile`
+     - *(Optional for email reading)* `https://www.googleapis.com/auth/gmail.readonly`
    - Save and set Publishing Status to **In production** (or add Test Users if in testing phase).
 
 3. **Create Credentials**:
