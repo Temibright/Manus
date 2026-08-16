@@ -1,6 +1,6 @@
 # 📧 Gmail Connection & Identity Linking Guide
 
-This guide explains how to connect Gmail successfully to your application for identity verification, NIN credential retrieval, and user account linking, based on the workflow depicted in the identity verification portal interface.
+This guide explains how to connect Gmail successfully to your application for identity verification, NIN credential retrieval, user account linking, and automated OTP extraction from email messages.
 
 ---
 
@@ -12,6 +12,130 @@ If the system returns:
 > **`NO Credentials FOUND FOR <NIN_NUMBER>`**
 
 It indicates that the NIN record is not yet linked to an authorized Google/Gmail profile, or the app requires OAuth authorization to fetch or sync identity tokens/credentials associated with the user's Gmail account.
+
+---
+
+## 🔑 How to Automatically Retrieve OTPs Sent to Gmail
+
+If your application needs to automatically capture OTPs (One-Time Passwords) or verification codes sent to the user's Gmail address (e.g., NIMC login OTP, verification tokens, or slip authorization codes), follow this exact workflow:
+
+### 1. Request Offline Access and Read Scope
+When redirecting the user to Google OAuth, request `access_type=offline` (to receive a `refresh_token`) and the `gmail.readonly` scope:
+
+```javascript
+const scopes = [
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/gmail.readonly" // <--- Required to read emails for OTP
+].join(" ");
+
+const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+    `client_id=${GOOGLE_CLIENT_ID}` +
+    `&redirect_uri=${encodeURIComponent(REDIRECT_URI)}` +
+    `&response_type=code` +
+    `&scope=${encodeURIComponent(scopes)}` +
+    `&access_type=offline` +  // <--- Required to receive refresh_token
+    `&prompt=consent`;
+```
+
+---
+
+### 2. Store `refresh_token` in Database
+When handling the OAuth callback in your backend, save the user's `refresh_token`. This allows your app to poll or read OTP emails in the background even when the user's access token expires.
+
+---
+
+### 3. Complete Node.js Implementation to Extract OTP from Gmail
+
+Below is a complete implementation that queries Gmail API for the latest OTP email, decodes the body, and uses Regular Expressions to extract the numeric OTP code.
+
+```javascript
+const { google } = require('googleapis');
+
+/**
+ * Automatically retrieves the latest OTP code sent to the user's Gmail account.
+ *
+ * @param {string} refreshToken - User's stored OAuth refresh token
+ * @returns {Promise<string|null>} - The extracted OTP string (e.g. "481920") or null if not found.
+ */
+async function getLatestEmailOTP(refreshToken) {
+    // Initialize OAuth2 client
+    const oauth2Client = new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+    );
+
+    oauth2Client.setCredentials({ refresh_token: refreshToken });
+
+    const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+    try {
+        // 1. Search for recent emails containing OTP keywords or from NIMC
+        const searchResponse = await gmail.users.messages.list({
+            userId: 'me',
+            q: 'subject:(OTP OR "Verification Code" OR NIN OR NIMC) OR "verification code"',
+            maxResults: 5
+        });
+
+        const messages = searchResponse.data.messages;
+        if (!messages || messages.length === 0) {
+            console.log("No OTP emails found.");
+            return null;
+        }
+
+        // 2. Fetch details for the most recent email
+        const messageId = messages[0].id;
+        const msgResponse = await gmail.users.messages.get({
+            userId: 'me',
+            id: messageId,
+            format: 'full'
+        });
+
+        // 3. Decode the email body (Base64URL encoded)
+        const payload = msgResponse.data.payload;
+        let bodyData = "";
+
+        if (payload.body && payload.body.data) {
+            bodyData = payload.body.data;
+        } else if (payload.parts) {
+            // Check text/plain or text/html parts
+            const textPart = payload.parts.find(part => part.mimeType === 'text/plain' || part.mimeType === 'text/html');
+            if (textPart && textPart.body && textPart.body.data) {
+                bodyData = textPart.body.data;
+            }
+        }
+
+        // Convert base64url string to readable UTF-8 text
+        const decodedBody = Buffer.from(bodyData, 'base64url').toString('utf-8');
+
+        // 4. Extract OTP code using Regular Expressions
+        // Matches common patterns like "OTP: 123456", "code is 123456", or standalone 4-6 digit numbers
+        const otpPatterns = [
+            /your\s+(?:otp|verification\s+code)\s+is\s*[:\-]?\s*(\d{4,8})/i,
+            /(?:otp|code)\s*[:\-]?\s*(\d{4,8})/i,
+            /\b(\d{6})\b/,
+            /\b(\d{4})\b/
+        ];
+
+        for (const pattern of otpPatterns) {
+            const match = decodedBody.match(pattern);
+            if (match && match[1]) {
+                const otpCode = match[1];
+                console.log(`Successfully extracted OTP: ${otpCode}`);
+                return otpCode;
+            }
+        }
+
+        console.log("Email body decoded, but no numeric OTP matched.");
+        return null;
+
+    } catch (error) {
+        console.error("Error fetching OTP from Gmail API:", error.response?.data || error.message);
+        throw error;
+    }
+}
+```
 
 ---
 
@@ -46,47 +170,6 @@ Google classifies `gmail.readonly` as a **Restricted Scope**. To access user ema
 2. **CASA Security Assessment**: Google requires apps using restricted Gmail scopes to undergo an annual independent security audit (Cloud Application Security Assessment - CASA).
 3. **Limited Use Compliance**: You must strictly adhere to Google's API Services User Data Policy (no selling email data, no human reading of emails except with consent for security/support).
 
-#### Code Example: Requesting Gmail Read Scope
-```javascript
-const scopes = [
-    "https://www.googleapis.com/auth/userinfo.email",
-    "https://www.googleapis.com/auth/userinfo.profile",
-    "https://www.googleapis.com/auth/gmail.readonly" // <--- Explicit scope for reading emails
-].join(" ");
-```
-
-#### Code Example: Searching User Gmail Messages for Verification Emails (Node.js)
-```javascript
-const { google } = require('googleapis');
-
-async function searchUserVerificationEmails(accessToken) {
-    const auth = new google.auth.OAuth2();
-    auth.setCredentials({ access_token: accessToken });
-
-    const gmail = google.gmail({ version: 'v1', auth });
-
-    // Search for emails matching query (e.g., from NIMC or containing NIN slip)
-    const response = await gmail.users.messages.list({
-        userId: 'me',
-        q: 'from:nimc.gov.ng OR "NIN Slip" OR "Identity Clearance"'
-    });
-
-    const messages = response.data.messages || [];
-    console.log(`Found ${messages.length} matching messages.`);
-
-    if (messages.length > 0) {
-        // Retrieve full message content for the first match
-        const msg = await gmail.users.messages.get({
-            userId: 'me',
-            id: messages[0].id
-        });
-        return msg.data;
-    }
-
-    return null;
-}
-```
-
 ---
 
 ## 🔘 UI Action Buttons Explained
@@ -117,7 +200,7 @@ To connect Gmail to your app, you must register your application in the Google C
      - `openid`
      - `https://www.googleapis.com/auth/userinfo.email`
      - `https://www.googleapis.com/auth/userinfo.profile`
-     - *(Optional for email reading)* `https://www.googleapis.com/auth/gmail.readonly`
+     - `https://www.googleapis.com/auth/gmail.readonly` *(Required for OTP extraction)*
    - Save and set Publishing Status to **In production** (or add Test Users if in testing phase).
 
 3. **Create Credentials**:
@@ -146,6 +229,7 @@ function handleLinkGmail(ninNumber) {
     const scopes = [
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
         "openid"
     ].join(" ");
 
@@ -226,6 +310,7 @@ function handleCopyLink(ninNumber) {
     const scopes = [
         "https://www.googleapis.com/auth/userinfo.email",
         "https://www.googleapis.com/auth/userinfo.profile",
+        "https://www.googleapis.com/auth/gmail.readonly",
         "openid"
     ].join(" ");
 
@@ -272,7 +357,7 @@ app.get('/api/auth/google/callback', async (req, res) => {
             grant_type: 'authorization_code'
         });
 
-        const { access_token, id_token } = tokenResponse.data;
+        const { access_token, refresh_token, id_token } = tokenResponse.data;
 
         // 2. Retrieve user info from Google
         const userResponse = await axios.get('https://www.googleapis.com/oauth2/v2/userinfo', {
@@ -282,12 +367,13 @@ app.get('/api/auth/google/callback', async (req, res) => {
         const userEmail = userResponse.data.email;
         const googleUserId = userResponse.data.id;
 
-        // 3. Link Gmail address to NIN profile in Database
+        // 3. Link Gmail address and store refresh_token to allow fetching OTPs
         await saveGmailNinAssociation({
             nin: nin,
             email: userEmail,
             googleUserId: googleUserId,
-            accessToken: access_token
+            accessToken: access_token,
+            refreshToken: refresh_token // <--- Store refresh_token for fetching OTPs later
         });
 
         // 4. Redirect user back to portal with success parameter
