@@ -15,6 +15,76 @@ It indicates that the NIN record is not yet linked to an authorized Google/Gmail
 
 ---
 
+## 💻 Where & How the Extracted OTP Code is Displayed
+
+Once your backend fetches and extracts the OTP code from Gmail, there are **three primary ways** it is displayed and used in your application:
+
+### Option A: Auto-filled Directly into the OTP Input Box (Recommended UX)
+Your frontend web page or mobile app polls the backend while waiting for the email. Once the backend extracts the OTP, the frontend automatically populates the input field and submits the form.
+
+```javascript
+// Frontend polling script (e.g., in your NIN portal page)
+async function pollForGmailOTP(ninNumber) {
+    const statusText = document.getElementById("statusMessage");
+    statusText.innerText = "Checking Gmail for OTP...";
+
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch(`/api/get-gmail-otp?nin=${ninNumber}`);
+            const data = await res.json();
+
+            if (data.success && data.otp) {
+                clearInterval(interval);
+
+                // 1. Display OTP in the input field automatically
+                const otpInput = document.getElementById("otpField");
+                otpInput.value = data.otp;
+
+                // 2. Show success banner
+                statusText.innerText = `OTP Received: ${data.otp}`;
+
+                // 3. (Optional) Auto-submit verification form
+                document.getElementById("verifyForm").submit();
+            }
+        } catch (err) {
+            console.error("Polling error:", err);
+        }
+    }, 3000); // Poll every 3 seconds
+}
+```
+
+---
+
+### Option B: Displayed in a Toast / Notification Banner
+An alert notification or modal banner pops up on top of your app interface:
+
+```html
+<!-- Notification Modal HTML -->
+<div id="otpModal" class="alert alert-success" style="display:none;">
+    <strong>OTP Detected!</strong> Your verification code is:
+    <span id="otpCodeValue" style="font-size: 1.5rem; font-weight: bold; color: #155724;">481920</span>
+    <button onclick="copyOtpToClipboard()">Copy Code</button>
+</div>
+```
+
+---
+
+### Option C: Returned in Backend REST API Response JSON
+If you are calling the API programmatically (e.g., from your server, mobile app, or WordPress plugin), the endpoint responds with JSON:
+
+```json
+{
+  "success": true,
+  "nin": "41874076779",
+  "gmail": "user@gmail.com",
+  "otp": "481920",
+  "message": "OTP successfully fetched and extracted from Gmail",
+  "received_at": "2026-08-16T22:52:18Z"
+}
+```
+
+---
+
 ## 🔑 How to Automatically Retrieve OTPs Sent to Gmail
 
 If your application needs to automatically capture OTPs (One-Time Passwords) or verification codes sent to the user's Gmail address (e.g., NIMC login OTP, verification tokens, or slip authorization codes), follow this exact workflow:
