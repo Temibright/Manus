@@ -66,9 +66,47 @@ Endpoints to issue and manage USD Virtual Cards (including Lite cards and contac
 
 Generate and manage dedicated and dynamic virtual bank accounts for automated payment collection.
 
+### 3.1 Bank Account Creation Endpoints
+
+By default, **Nombank MFB** accounts are created using the default endpoint. For bank-specific virtual accounts, use the respective endpoints:
+
+| Bank Provider | Endpoint URL | Method |
+| :--- | :--- | :---: |
+| **Default (New Customer)** | `https://strowallet.com/api/virtual-bank/new-customer` | `POST` |
+| **PAGA Bank Account** | `https://strowallet.com/api/virtual-bank/paga` | `POST` |
+| **Sterling Bank Account** | `https://strowallet.com/api/virtual-bank/sterling` | `POST` |
+| **Nombank MFB Account** | `https://strowallet.com/api/virtual-bank/amucha` | `POST` |
+| **Fidelity Bank Account** | `https://strowallet.com/api/virtual-bank/fidelitybank` | `POST` |
+
+### 3.2 Request Body Parameters (`application/json`)
+
+| Parameter | Type | Required / Optional | Description |
+| :--- | :---: | :---: | :--- |
+| `public_key` | `string` | **Required** | StroWallet Public Key |
+| `email` | `string` | **Required** | Email address to receive payment notifications |
+| `account_name` | `string` | **Required** | Desired Bank Account Name |
+| `phone` | `string` | **Required** | Customer Phone Number |
+| `webhook_url` | `string` | **Required** | Webhook URL for auto notifications on payments |
+| `mode` | `string` | Optional | Environment mode (Default: `"sandbox"`, set to `"live"` for production) |
+| `developer_code` | `string` | Optional | Developer tracking code provided by StroWallet |
+
+#### Example Request Payload:
+```json
+{
+  "public_key": "YOUR_PUBLIC_KEY",
+  "email": "customer@example.com",
+  "account_name": "John Doe Enterprises",
+  "phone": "08012345678",
+  "webhook_url": "https://yourdomain.com/api/webhook/virtual-bank",
+  "mode": "sandbox",
+  "developer_code": "DEV123"
+}
+```
+
+### 3.3 Other Virtual Bank Account Endpoints
+
 | Endpoint | Method | Reference Path | Description |
 | :--- | :---: | :--- | :--- |
-| **Create Virtual Bank Account** | `POST` | `/reference/create-virtual-bank-account.md` | Generate static virtual accounts (default Nombank MFB or PAGA Bank). |
 | **WebHook** | Callback | `/reference/webhook.md` | Real-time webhook structure to receive account credit notifications. |
 | **Verify SessionID** | `GET` | `/reference/verify-sessionid.md` | Verify NIP bank transfer transaction using session ID. |
 | **Dynamic Virtual Account** | `POST` | `/reference/dynamic-virtual-acct.md` | Generate short-lived (30-minute) virtual accounts for checkout sessions. |
